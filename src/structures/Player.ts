@@ -126,7 +126,18 @@ export class Player {
     this.manager.players.set(options.guild, this);
     this.manager.emit("playerCreate", this);
     this.setVolume(options.volume ?? 100);
+    if(this.manager.options.replayOnDc && this.manager.nodes.filter(x => x.connected).size > 1) {
+      try {
+        this.manager.on('nodeDisconnect', async (node) => {
+          for(const players of [...this.manager.players.filter(x => x.node === node).values()]) {
+           await players.setNode(this.manager.leastUsedNodes.first().options.identifier)
+          }
+        })
+      } catch (error) {
+        this.manager.emit('replayError', this, error)
+      }
   }
+}
 
   /**
    * Same as Manager#search() but a shortcut on the player itself.
@@ -139,7 +150,26 @@ export class Player {
   ): Promise<SearchResult> {
     return this.manager.search(query, requester);
   }
-
+  /**
+   * Move the player to another connected node
+   * @param name
+   */
+  async setNode(name: string) {
+    if (this.node.options.identifier === name) return this; 
+    const node = this.manager.nodes.get(name) 
+    if(!node) throw Error('Please specify valid node name.');
+    if(!node.connected) throw Error('The node is not connected');
+    const options = {
+      op: "play",
+      guildId: this.guild,
+      track: this.queue.current.track,
+      startTime: this.position,
+    };
+    this.node = node;
+    await this.node.send(this.voiceState)
+    await this.node.send(options)
+    return this;
+  }
   /**
    * Sets the players equalizer band on-top of the existing ones.
    * @param bands
@@ -147,7 +177,7 @@ export class Player {
   public setEQ(...bands: EqualizerBand[]): this {
     // Hacky support for providing an array
     if (Array.isArray(bands[0])) bands = bands[0] as unknown as EqualizerBand[]
-
+ 
     if (!bands.length || !bands.every(
         (band) => JSON.stringify(Object.keys(band).sort()) === '["band","gain"]'
       )
